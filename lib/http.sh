@@ -8,16 +8,24 @@
 # These helpers return a JSON envelope { "status": ..., "body": ..., "headers": ... }.
 # =============================================================================
 
+# Headers (Authorization, client credentials) go to curl through a config file on a
+# pipe, not on the command line, so they do not show up in `ps` output.
+#   _http_header_cfg <header1> [<header2>] ...
+_http_header_cfg() {
+    local h
+    for h in "$@"; do
+        h=${h//\\/\\\\}
+        h=${h//\"/\\\"}
+        printf 'header = "%s"\n' "$h"
+    done
+}
+
 # GET a URL, return { status, body, headers } as JSON.
 #   http_get <url> [<header1>] [<header2>] ...
 http_get() {
     local url="$1"
     shift
-    local headers_args=()
-    while [ $# -gt 0 ]; do
-        headers_args+=(-H "$1")
-        shift
-    done
+    local hdrs=("$@")
 
     local tmp_body tmp_headers tmp_status
     tmp_body=$(mktemp)
@@ -26,7 +34,7 @@ http_get() {
 
     tmp_status=$(curl -sS -o "$tmp_body" -D "$tmp_headers" -w "%{http_code}" \
         --connect-timeout 10 --max-time 30 \
-        "${headers_args[@]}" "$url" 2>/dev/null) || tmp_status="000"
+        -K <(_http_header_cfg "${hdrs[@]}") "$url" 2>/dev/null) || tmp_status="000"
 
     local body headers
     body=$(cat "$tmp_body")
@@ -49,20 +57,16 @@ http_post_json() {
     local url="$1"
     local json_body="$2"
     shift 2
-    local headers_args=(-H "Content-Type: application/json")
-    while [ $# -gt 0 ]; do
-        headers_args+=(-H "$1")
-        shift
-    done
+    local hdrs=("Content-Type: application/json" "$@")
 
     local tmp_body tmp_status
     tmp_body=$(mktemp)
     trap "rm -f '$tmp_body'" RETURN
 
-    tmp_status=$(curl -sS -X POST -o "$tmp_body" -w "%{http_code}" \
+    tmp_status=$(printf '%s' "$json_body" | curl -sS -X POST -o "$tmp_body" -w "%{http_code}" \
         --connect-timeout 10 --max-time 30 \
-        "${headers_args[@]}" \
-        --data-raw "$json_body" \
+        -K <(_http_header_cfg "${hdrs[@]}") \
+        --data-binary @- \
         "$url" 2>/dev/null) || tmp_status="000"
 
     local body
@@ -83,20 +87,16 @@ http_post_form() {
     local url="$1"
     local form_data="$2"
     shift 2
-    local headers_args=(-H "Content-Type: application/x-www-form-urlencoded")
-    while [ $# -gt 0 ]; do
-        headers_args+=(-H "$1")
-        shift
-    done
+    local hdrs=("Content-Type: application/x-www-form-urlencoded" "$@")
 
     local tmp_body tmp_status
     tmp_body=$(mktemp)
     trap "rm -f '$tmp_body'" RETURN
 
-    tmp_status=$(curl -sS -X POST -o "$tmp_body" -w "%{http_code}" \
+    tmp_status=$(printf '%s' "$form_data" | curl -sS -X POST -o "$tmp_body" -w "%{http_code}" \
         --connect-timeout 10 --max-time 30 \
-        "${headers_args[@]}" \
-        --data "$form_data" \
+        -K <(_http_header_cfg "${hdrs[@]}") \
+        --data-binary @- \
         "$url" 2>/dev/null) || tmp_status="000"
 
     local body
